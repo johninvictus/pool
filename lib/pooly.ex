@@ -13,11 +13,11 @@ defmodule Pooly do
     Pooly.Supervisor.start_link(pool_config)
   end
 
-  def checkout, do: Server.checkout()
+  def checkout(pool_name), do: Server.checkout(pool_name)
 
-  def checkin(worker_pid) do
-    Server.checkin(worker_pid)
+  def checkin(pool_name, worker_pid) do
+    Server.checkin(pool_name, worker_pid)
   end
 
-  def status, do: Server.status()
+  def status(pool_name), do: Server.status(pool_name)
 end

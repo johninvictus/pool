@@ -3,15 +3,15 @@ defmodule Pooly.Supervisor do
   use Supervisor
 
   def start_link(pool_config) do
-    Supervisor.start_link(__MODULE__, pool_config)
+    Supervisor.start_link(__MODULE__, pool_config, name: __MODULE__)
   end
 
   @impl true
   def init(pool_config) do
-    Process.register(self(), :supervisor)
 
     children = [
-      {Pooly.Server, [self(), pool_config]}
+      {Pooly.Server, [pool_config]},
+      {Pooly.PoolsSupervisor, []}
     ]
 
     opts = [strategy: :one_for_all]
