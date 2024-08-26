@@ -1,21 +1,36 @@
 # Pooly
 
-**TODO: Add description**
+A poolboy concept application
 
-## Installation
+## It for learning purpose
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `pooly` to your list of dependencies in `mix.exs`:
+Here is the supervision tree,
+
+![Image](./pooly.png)
+
+The example pool config
 
 ```elixir
-def deps do
-  [
-    {:pooly, "~> 0.1.0"}
-  ]
-end
+pool_config = [
+      [name: "Pool1", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 5],
+      [name: "Pool2", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 3],
+      [name: "Pool3", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 4]
+    ]
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/pooly>.
+## Usage
 
+Checkout a process
+```
+iex> Pooly.checkout(pool_name)
+```
+
+Return/checkin a process
+```
+iex> Pooly.checkin(pool_name, process_pid)
+```
+
+Get the current state of a pool
+```
+iex> Pooly.status(pool_name)
+```

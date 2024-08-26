@@ -118,7 +118,7 @@ defmodule Pooly.PoolServer do
         {:EXIT, _pid, _reason},
         %{workers: workers, pool_sup: sup, mfa: mfa} = state
       ) do
-    [new_worker] = start_worker_sup(sup, mfa, 1)
+    [new_worker] = IO.inspect(start_worker_sup(sup, mfa, 1))
     new_state = %{state | workers: [new_worker | workers]}
 
     {:noreply, new_state}
