@@ -4,7 +4,7 @@ defmodule Pooly.PoolServer do
   alias Pooly.WorkerSupervisor
 
   defmodule State do
-    defstruct sup: nil,
+    defstruct pool_sup: nil,
               worker_sup: nil,
               mfa: nil,
               size: nil,
@@ -38,7 +38,8 @@ defmodule Pooly.PoolServer do
     monitors = :ets.new(:monitors, [:private])
 
     state =
-      Enum.reduce(pool_conf, %State{sup: pool_sup, monitors: monitors}, fn {key, value}, acc ->
+      Enum.reduce(pool_conf, %State{pool_sup: pool_sup, monitors: monitors}, fn {key, value},
+                                                                                acc ->
         Map.put(acc, key, value)
       end)
 
@@ -48,7 +49,7 @@ defmodule Pooly.PoolServer do
   @impl true
   def handle_continue(
         :start_worker_supervisor,
-        %{sup: sup, size: size, mfa: mfa, name: name} = state
+        %{pool_sup: sup, size: size, mfa: mfa, name: name} = state
       ) do
     {:ok, worker_sup} = Supervisor.start_child(sup, worker_supervisor_spec(name))
     workers = start_worker_sup(worker_sup, mfa, size)
@@ -108,23 +109,19 @@ defmodule Pooly.PoolServer do
   end
 
   @impl true
+  def handle_info({:EXIT, worker_sup, reason}, %{worker_sup: worker_sup} = state) do
+    {:stop, reason, state}
+  end
+
+  @impl true
   def handle_info(
-        {:EXIT, pid, _reason},
-        %{monitors: monitors, workers: workers, sup: sup, mfa: mfa} = state
+        {:EXIT, _pid, _reason},
+        %{workers: workers, pool_sup: sup, mfa: mfa} = state
       ) do
-    case :ets.lookup(monitors, pid) do
-      [{worker_pid, ref}] ->
-        true = Process.demonitor(ref)
-        true = :ets.delete(worker_pid)
+    [new_worker] = start_worker_sup(sup, mfa, 1)
+    new_state = %{state | workers: [new_worker | workers]}
 
-        [new_worker] = start_worker_sup(sup, mfa, 1)
-        new_state = %{state | workers: [new_worker | workers]}
-
-        {:noreply, new_state}
-
-      _ ->
-        {:noreply, state}
-    end
+    {:noreply, new_state}
   end
 
   @impl true
@@ -139,7 +136,7 @@ defmodule Pooly.PoolServer do
   end
 
   defp worker_supervisor_spec(name) do
-    Supervisor.child_spec({WorkerSupervisor, [[]]},
+    Supervisor.child_spec({WorkerSupervisor, [self()]},
       id: "#{name}WorkerSupervisor",
       restart: :temporary
     )
@@ -148,6 +145,7 @@ defmodule Pooly.PoolServer do
   defp start_worker_sup(worker_sup, mfa, size) do
     Enum.map(1..size, fn _ ->
       {:ok, worker} = WorkerSupervisor.start_child(worker_sup, mfa)
+      true = Process.link(worker)
       worker
     end)
   end

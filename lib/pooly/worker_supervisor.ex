@@ -2,8 +2,8 @@ defmodule Pooly.WorkerSupervisor do
   @moduledoc false
   use DynamicSupervisor
 
-  def start_link(_) do
-    DynamicSupervisor.start_link(__MODULE__, [])
+  def start_link([pool_server]) do
+    DynamicSupervisor.start_link(__MODULE__, [pool_server])
   end
 
   def start_child(supervisor, {m, _f, _a} = mfa) do
@@ -16,7 +16,8 @@ defmodule Pooly.WorkerSupervisor do
   end
 
   @impl true
-  def init(_) do
+  def init([pool_server]) do
+    Process.link(pool_server)
 
     DynamicSupervisor.init(
       strategy: :one_for_one,
