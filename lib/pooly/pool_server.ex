@@ -10,7 +10,9 @@ defmodule Pooly.PoolServer do
               size: nil,
               workers: nil,
               monitors: nil,
-              name: nil
+              name: nil,
+              overflow: 0,
+              max_overflow: nil
   end
 
   ## API
@@ -58,15 +60,26 @@ defmodule Pooly.PoolServer do
   end
 
   @impl true
-  def handle_call(:checkout, {from_pid, _ref}, %{workers: workers, monitors: monitors} = state) do
+  def handle_call(
+        :checkout,
+        {from_pid, _ref},
+        %{workers: workers, monitors: monitors, worker_sup: sup, mfa: mfa} = state
+      ) do
     case workers do
       [worker | rest] ->
         ref = Process.monitor(from_pid)
         true = :ets.insert(monitors, {worker, ref})
         {:reply, worker, %{state | workers: rest}}
 
+      [] when state.max_overflow > 0 and state.overflow < state.max_overflow ->
+        [new_worker] = start_worker_sup(sup, mfa, 1)
+        ref = Process.monitor(from_pid)
+        true = :ets.insert(monitors, {new_worker, ref})
+
+        {:reply, new_worker, %{state | overflow: state.overflow + 1}}
+
       [] ->
-        {:reply, :noproc, state}
+        {:reply, :full, state}
     end
   end
 
@@ -82,7 +95,9 @@ defmodule Pooly.PoolServer do
         true = Process.demonitor(ref)
         true = :ets.delete(monitors, worker_pid)
 
-        {:noreply, %{state | workers: [pid | workers]}}
+        new_state = handle_checkin(pid, state)
+
+        {:noreply, new_state}
 
       [] ->
         {:noreply, state}
@@ -114,14 +129,15 @@ defmodule Pooly.PoolServer do
   end
 
   @impl true
-  def handle_info(
-        {:EXIT, _pid, _reason},
-        %{workers: workers, pool_sup: sup, mfa: mfa} = state
-      ) do
-    [new_worker] = IO.inspect(start_worker_sup(sup, mfa, 1))
-    new_state = %{state | workers: [new_worker | workers]}
+  def handle_info({:EXIT, pid, _reason}, %{monitors: monitors} = state) do
+    case :ets.lookup(monitors, pid) do
+      [{pid, _ref}] ->
+        new_state = handle_worker_exit(state)
+        {:noreply, new_state}
 
-    {:noreply, new_state}
+      _ ->
+        {:noreply, state}
+    end
   end
 
   @impl true
@@ -148,5 +164,41 @@ defmodule Pooly.PoolServer do
       true = Process.link(worker)
       worker
     end)
+  end
+
+  defp handle_checkin(pid, state) do
+    %{
+      worker_sup: worker_sup,
+      workers: workers,
+      overflow: overflow
+    } = state
+
+    if overflow > 0 do
+      :ok = dismiss_worker(worker_sup, pid)
+      %{state | overflow: overflow - 1}
+    else
+      %{state | overflow: 0, workers: [pid | workers]}
+    end
+  end
+
+  defp handle_worker_exit(state) do
+    %{
+      worker_sup: worker_sup,
+      workers: workers,
+      overflow: overflow,
+      mfa: mfa
+    } = state
+
+    if overflow > 0 do
+      %{state | overflow: overflow - 1}
+    else
+      [new_worker] = start_worker_sup(worker_sup, mfa, 1)
+      %{state | workers: [new_worker | workers]}
+    end
+  end
+
+  defp dismiss_worker(sup, pid) do
+    true = Process.unlink(pid)
+    Supervisor.terminate_child(sup, pid)
   end
 end

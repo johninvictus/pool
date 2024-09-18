@@ -5,9 +5,9 @@ defmodule Pooly do
 
   def start(_type, _args) do
     pool_config = [
-      [name: "Pool1", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 5],
-      [name: "Pool2", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 3],
-      [name: "Pool3", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 4]
+      [name: "Pool1", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 5, max_overflow: 3],
+      [name: "Pool2", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 3, max_overflow: 0],
+      [name: "Pool3", mfa: {Pooly.SampleWorker, :start_link, [[]]}, size: 4, max_overflow: 0]
     ]
 
     Pooly.Supervisor.start_link(pool_config)
