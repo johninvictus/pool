@@ -12,7 +12,8 @@ defmodule Pooly.PoolServer do
               monitors: nil,
               name: nil,
               overflow: 0,
-              max_overflow: nil
+              max_overflow: nil,
+              waiting: nil
   end
 
   ## API
@@ -20,8 +21,8 @@ defmodule Pooly.PoolServer do
     GenServer.start_link(__MODULE__, [pool_sup, pool_conf], name: name(pool_conf[:name]))
   end
 
-  def checkout(pool_name) do
-    GenServer.call(name(pool_name), :checkout)
+  def checkout(pool_name, block, timeout) do
+    GenServer.call(name(pool_name), {:checkout, block}, timeout)
   end
 
   def checkin(pool_name, worker_pid) do
@@ -38,12 +39,16 @@ defmodule Pooly.PoolServer do
   def init([pool_sup, pool_conf]) do
     Process.flag(:trap_exit, true)
     monitors = :ets.new(:monitors, [:private])
+    waiting = :queue.new()
 
     state =
-      Enum.reduce(pool_conf, %State{pool_sup: pool_sup, monitors: monitors}, fn {key, value},
-                                                                                acc ->
-        Map.put(acc, key, value)
-      end)
+      Enum.reduce(
+        pool_conf,
+        %State{pool_sup: pool_sup, monitors: monitors, waiting: waiting},
+        fn {key, value}, acc ->
+          Map.put(acc, key, value)
+        end
+      )
 
     {:ok, state, {:continue, :start_worker_supervisor}}
   end
@@ -60,11 +65,9 @@ defmodule Pooly.PoolServer do
   end
 
   @impl true
-  def handle_call(
-        :checkout,
-        {from_pid, _ref},
-        %{workers: workers, monitors: monitors, worker_sup: sup, mfa: mfa} = state
-      ) do
+  def handle_call({:checkout, block}, {from_pid, _ref} = from, state) do
+    %{workers: workers, monitors: monitors, worker_sup: sup, mfa: mfa, waiting: waiting} = state
+
     case workers do
       [worker | rest] ->
         ref = Process.monitor(from_pid)
@@ -77,6 +80,11 @@ defmodule Pooly.PoolServer do
         true = :ets.insert(monitors, {new_worker, ref})
 
         {:reply, new_worker, %{state | overflow: state.overflow + 1}}
+
+      [] when block == true ->
+        ref = Process.monitor(from_pid)
+        waiting = :queue.in({from, ref}, waiting)
+        {:noreply, %{state | waiting: waiting}, :infinity}
 
       [] ->
         {:reply, :full, state}
@@ -132,6 +140,7 @@ defmodule Pooly.PoolServer do
   def handle_info({:EXIT, pid, _reason}, %{monitors: monitors} = state) do
     case :ets.lookup(monitors, pid) do
       [{pid, _ref}] ->
+        :ets.delete(monitors, pid)
         new_state = handle_worker_exit(pid, state)
         {:noreply, new_state}
 
@@ -170,14 +179,23 @@ defmodule Pooly.PoolServer do
     %{
       worker_sup: worker_sup,
       workers: workers,
-      overflow: overflow
+      overflow: overflow,
+      monitors: monitors,
+      waiting: waiting
     } = state
 
-    if overflow > 0 do
-      :ok = dismiss_worker(worker_sup, pid)
-      %{state | overflow: overflow - 1}
-    else
-      %{state | overflow: 0, workers: [pid | workers]}
+    case :queue.out(waiting) do
+      {{:value, {from, ref}}, left} ->
+        true = :ets.insert(monitors, {pid, ref})
+        GenServer.reply(from, pid)
+        %{state | waiting: left}
+
+      {:empty, empty} when overflow > 0 ->
+        :ok = dismiss_worker(worker_sup, pid)
+        %{state | overflow: overflow - 1, waiting: empty}
+
+      {:empty, empty} ->
+        %{state | overflow: 0, workers: [pid | workers], waiting: empty}
     end
   end
 
@@ -186,15 +204,26 @@ defmodule Pooly.PoolServer do
       worker_sup: worker_sup,
       workers: workers,
       overflow: overflow,
-      mfa: mfa
+      mfa: mfa,
+      waiting: waiting,
+      monitors: monitors
     } = state
 
-    if overflow > 0 do
-      %{state | overflow: overflow - 1}
-    else
-      [new_worker] = start_worker_sup(worker_sup, mfa, 1)
-      workers = Enum.reject(workers, &(&1 == pid))
-      %{state | workers: [new_worker | workers]}
+    case :queue.out(waiting) do
+      {{:value, {from, ref}}, left} ->
+        [new_worker] = start_worker_sup(worker_sup, mfa, 1)
+        true = :ets.insert(monitors, {new_worker, ref})
+        GenServer.reply(from, new_worker)
+
+        %{state | waiting: left}
+
+      {:empty, empty} when overflow > 0 ->
+        %{state | overflow: overflow - 1, waiting: empty}
+
+      {:empty, empty} ->
+        [new_worker] = start_worker_sup(worker_sup, mfa, 1)
+        workers = Enum.reject(workers, &(&1 == pid))
+        %{state | workers: [new_worker | workers], waiting: empty}
     end
   end
 

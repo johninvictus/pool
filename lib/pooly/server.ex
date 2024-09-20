@@ -8,8 +8,8 @@ defmodule Pooly.Server do
     GenServer.start_link(__MODULE__, pool_conf, name: __MODULE__)
   end
 
-  def checkout(pool_name) do
-    GenServer.call(:"#{pool_name}Server", :checkout)
+  def checkout(pool_name, block, timeout) do
+    Pooly.PoolServer.checkout(pool_name, block, timeout)
   end
 
   def checkin(pool_name, worker_pid) do
